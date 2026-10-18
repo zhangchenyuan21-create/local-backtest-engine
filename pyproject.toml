@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jq-local-backtest-engine"
+version = "0.1.0"
+description = "A local, JoinQuant-compatible daily backtest engine with realistic A-share execution rules."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "K1294" }]
+dependencies = [
+  "pandas>=2.0",
+  "numpy>=1.24",
+  "pyarrow>=12.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/zhangchenyuan21-create/local-backtest-engine"
+Repository = "https://github.com/zhangchenyuan21-create/local-backtest-engine"
+Issues = "https://github.com/zhangchenyuan21-create/local-backtest-engine/issues"
+
+[tool.setuptools]
+py-modules = ["runner", "runner_main"]
+packages = ["jqdata"]
