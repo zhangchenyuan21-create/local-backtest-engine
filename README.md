@@ -225,3 +225,6 @@ python tests/test_trade.py
 
 
 Limit prices are derived from the local previous close and board-specific percentages. With qfq (adjusted) data they are research approximations, not live-order prices.
+
+Current regression: 43/43 execution tests, 45/45 jqdata shim tests, 4/4 smoke tests.
+Release: https://github.com/zhangchenyuan21-create/local-backtest-engine/releases/tag/v0.1.0
