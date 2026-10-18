@@ -1,4 +1,4 @@
-﻿# 本地回测引擎（JoinQuant 兼容）
+# 本地回测引擎（JoinQuant 兼容）
 
 
 一个从日常量化研究里抽离出来的**本地日线回测引擎**。它用同名 `jqdata` 替身让聚宽风格的策略文件尽量少改地跑在本地，数据落在自己的目录里，不依赖聚宽服务器回测。
@@ -18,6 +18,7 @@
 - 涨跌停约束：主板 10%、ST 5%、创业板/科创板 20%、北交所 30%，按前一交易日收盘价计算
 - 成交量约束：默认最多吃掉当日成交量的 25%，可配置；按整手部分成交
 - 公司行动、停牌和受限持仓台账
+- v0.2.0：绩效/风险报告、因子 IC/分层评价、参数网格搜索
 - 输出 `equity.csv`、`fills.csv`、`run.log` 等可审计产物
 - 数据目录可切换，便于对比不同数据源
 
@@ -141,6 +142,41 @@ python runner_main.py compare `
 
 对账指标和口径写在 `runner_main.py` 顶部注释里。
 
+## 研究工具（v0.2.0）
+
+以下工具只读取回测产物，不改变 `runner_main.py run` 的撮合行为。
+
+### 绩效/风险报告
+
+```powershell
+python -m analytics --out out/demo --format md,json,html
+```
+
+输出 `metrics.json`、`report.md`、`report.html`，包含总收益、年化收益、波动、Sharpe、Sortino、Calmar、最大回撤、日胜率、交易胜率、盈亏比、平均持仓天数、换手率和费用。
+
+### 因子 IC/分层评价
+
+```powershell
+python -m factors --data data --factor momentum --window 20 --horizon 5 --out out/factor
+```
+
+支持 `momentum`、`reversal`、`volatility`、`ma_gap`、`rsi`；输出 IC、RankIC、ICIR、t 统计量、分层收益、多空收益和换手率。
+
+### 参数网格搜索
+
+```powershell
+python -m optimize `
+  --template variants/demo_template.py `
+  --grid grid.json `
+  --cash 350000 `
+  --start 2020-01-01 `
+  --end 2024-12-31 `
+  --out out/optimize `
+  --objective sharpe `
+  --workers 4
+```
+
+模板中使用 `{{fast}}`、`{{slow}}` 这样的占位符；也可以直接传入一组策略文件。每个变体使用独立子进程和独立输出目录，不会干扰当前正在运行的回测。
 ## 输出
 
 一次回测至少产生：
@@ -170,6 +206,9 @@ date,code,side,price,amount,value,fee,cash_after,run,run_date
 ```text
 runner.py            回测驱动器：加载策略、逐日循环、撮合、估值
 runner_main.py       命令行：run / compare / status
+analytics.py         绩效与风险指标、Markdown/HTML 报告
+factors.py           因子计算、IC、分层、多空和换手
+optimize.py          参数网格/策略变体批量回测
 jqdata/              聚宽 API 替身与本地数据访问层
   api.py             get_price / attribute_history / 财务查询等
   trade.py           组合、订单、费用、T+1、成交
@@ -187,9 +226,10 @@ tests/               自检与撮合回归测试
 python tests/test_shim.py
 python tests/test_trade.py
 python -m unittest discover -s tests -p "test_smoke.py" -v
+python -m unittest tests.test_analytics tests.test_factors tests.test_optimize -v
 ```
 
-`test_trade.py` 使用自造数据测试撮合链路，不访问网络。`test_shim.py` 验证替身 API 契约和导入链。
+`test_trade.py` 使用自造数据测试撮合链路，不访问网络。`test_shim.py` 验证替身 API 契约和导入链。`test_analytics.py`、`test_factors.py`、`test_optimize.py` 验证新增研究工具。
 
 ## 数据与代码边界
 
@@ -226,5 +266,5 @@ python tests/test_trade.py
 
 Limit prices are derived from the local previous close and board-specific percentages. With qfq (adjusted) data they are research approximations, not live-order prices.
 
-Current regression: 43/43 execution tests, 45/45 jqdata shim tests, 4/4 smoke tests.
-Release: https://github.com/zhangchenyuan21-create/local-backtest-engine/releases/tag/v0.1.0
+Current regression: 43/43 execution, 45/45 jqdata shim, 4/4 smoke, 11/11 analytics/factors/optimize.
+Release: https://github.com/zhangchenyuan21-create/local-backtest-engine/releases
