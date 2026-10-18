@@ -114,6 +114,17 @@ def cmd_run(a):
         print(f"\n  产出目录 {a.out}")
         for f in sorted(os.listdir(a.out)):
             print(f"    {f:<14}{os.path.getsize(os.path.join(a.out, f)):>12,} 字节")
+    if getattr(a, "report", False):
+        if not a.out:
+            print("  ⚠️ --report 需要同时指定 --out")
+        else:
+            try:
+                import analysis_report
+                result = analysis_report.write_report(a.out, formats=("md", "json"))
+                print(f"  综合分析报告：{result['written'].get('md')}")
+                print(f"  报告结论：{result['report']['readiness']}")
+            except Exception as exc:
+                print(f"  ⚠️ 分析报告生成失败（不影响回测结果）：{exc}")
     return 0
 
 
@@ -402,6 +413,7 @@ def main(argv=None):
                    help="开启前视偏差拦截（聚宽 avoid_future_data 语义）")
     r.add_argument("--quiet", action="store_true", help="不打印日志到屏幕")
     r.add_argument("--force", action="store_true", help="允许覆盖输出目录")
+    r.add_argument("--report", action="store_true", help="回测完成后生成综合分析报告")
     r.set_defaults(func=cmd_run)
 
     c = sub.add_parser("compare", help="与聚宽结果对账")

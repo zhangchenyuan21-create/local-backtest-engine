@@ -23,6 +23,7 @@
 - v0.4.0：Walk-forward ML 信号生成，可选接入现有回测
 - v0.5.0：PaperBroker 回放与同花顺模拟盘 dry-run 适配器
 - v0.6.0：可选 LightGBM/sklearn 模型、Paper/THS 对账、Qlib CSV 桥接、vnpy/QMT dry-run 适配器
+- v0.7.0：回测后综合分析报告，覆盖绩效、因子、优化、Walk-forward、ML、Paper 和对账证据
 - 输出 `equity.csv`、`fills.csv`、`run.log` 等可审计产物
 - 数据目录可切换，便于对比不同数据源
 
@@ -146,7 +147,7 @@ python runner_main.py compare `
 
 对账指标和口径写在 `runner_main.py` 顶部注释里。
 
-## 研究工具（v0.6.0）
+## 研究工具（v0.7.0）
 
 以下工具只读取回测产物，不改变 `runner_main.py run` 的撮合行为。
 
@@ -363,6 +364,14 @@ qmt = QmtAdapter.from_xtquant(trader, account, dry_run=True)
 - 真实验证前先跑模拟盘和订单对账
 - QMT 不同券商/版本接口差异较大，`order_type` / `price_type` 需要按本机封装核对
 
+### Post-backtest analysis report
+
+Run with `--report` or on an existing output directory:
+
+`python -m analysis_report --run out/demo --out out/demo`
+
+It writes `analysis_report.md` and `analysis_report.json` and summarizes metrics, factor/IC, optimization/DSR, walk-forward, ML, paper, reconciliation and live readiness. Missing evidence is marked as missing; it is not fabricated.
+
 ## 输出
 
 一次回测至少产生：
@@ -392,6 +401,7 @@ date,code,side,price,amount,value,fee,cash_after,run,run_date
 ```text
 runner.py            回测驱动器：加载策略、逐日循环、撮合、估值
 runner_main.py       命令行：run / compare / status
+analysis_report.py   回测后综合报告
 analytics.py         绩效与风险指标、Markdown/HTML 报告
 factors.py           因子计算、IC、分层、多空和换手
 broker.py            Broker 抽象、PaperBroker、ThsSimBroker 适配器
@@ -422,7 +432,7 @@ tests/               自检与撮合回归测试
 python tests/test_shim.py
 python tests/test_trade.py
 python -m unittest discover -s tests -p "test_smoke.py" -v
-python -m unittest tests.test_analytics tests.test_broker tests.test_factors tests.test_live tests.test_ml tests.test_ml_models tests.test_optimize tests.test_overfit tests.test_qlib_bridge tests.test_reconcile tests.test_walkforward -v
+python -m unittest tests.test_analysis_report tests.test_analytics tests.test_broker tests.test_factors tests.test_live tests.test_ml tests.test_ml_models tests.test_optimize tests.test_overfit tests.test_qlib_bridge tests.test_reconcile tests.test_walkforward -v
 ```
 
 `test_trade.py` 使用自造数据测试撮合链路，不访问网络。`test_shim.py` 验证替身 API 契约和导入链。`test_analytics.py`、`test_broker.py`、`test_factors.py`、`test_live.py`、`test_ml.py`、`test_ml_models.py`、`test_optimize.py`、`test_overfit.py`、`test_qlib_bridge.py`、`test_reconcile.py`、`test_walkforward.py` 验证研究、broker、Qlib 和 live 适配层。
@@ -462,5 +472,5 @@ python tests/test_trade.py
 
 Limit prices are derived from the local previous close and board-specific percentages. With qfq (adjusted) data they are research approximations, not live-order prices.
 
-Current regression: 43/43 execution, 45/45 jqdata shim, 4/4 smoke, 35/35 research/broker/Qlib/live tests (1 optional ML dependency skipped when absent).
+Current regression: 43/43 execution, 45/45 jqdata shim, 4/4 smoke, 37/37 report/research/broker/Qlib/live tests (1 optional ML dependency skipped when absent).
 Release: https://github.com/zhangchenyuan21-create/local-backtest-engine/releases

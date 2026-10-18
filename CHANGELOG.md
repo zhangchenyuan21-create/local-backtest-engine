@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.7.0
+
+- Add `analysis_report.py`: post-backtest report covering performance/risk, factor IC, optimization/DSR, walk-forward, ML, paper, reconciliation, risk flags and readiness.
+- Add `runner_main.py run --report` as an opt-in; default backtest behavior is unchanged.
+- Tests: 43 execution, 45 jqdata shim, 4 smoke, 37 report/research/broker/Qlib/live (1 optional ML dependency may skip).
+
 ## v0.6.0
 
 - Add optional `ml_models.py` for sklearn Ridge/HistGradientBoosting and LightGBM; Ridge remains the default.
