@@ -43,6 +43,7 @@ def load_close_panel(data_dir, adjusted=True) -> pd.DataFrame:
     if not series:
         raise ValueError("日线文件缺少 date/close 字段")
     panel = pd.concat(series, axis=1).sort_index()
+    panel.index = pd.Index([str(x)[:10] for x in panel.index], name="date")
     return panel
 
 

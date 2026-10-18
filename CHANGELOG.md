@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.4.0
+
+- Add `ml.py`: walk-forward Ridge training, out-of-sample `signal.csv` / `signal.parquet`, `ml_summary.json`.
+- Add `examples/signal_strategy.py`: optional strategy that consumes the signal file through the existing execution engine.
+- Default `runner_main.py run` and `jqdata/trade.py` behavior remains unchanged.
+- Tests: 43 execution, 45 jqdata shim, 4 smoke, 20 analytics/factors/ml/optimize/overfit/walkforward.
+
 ## v0.3.0
 
 - Add `overfit.py`: PSR, expected maximum Sharpe and Deflated Sharpe Ratio.
