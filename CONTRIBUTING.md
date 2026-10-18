@@ -14,7 +14,7 @@
 python -m unittest discover -s tests -p "test_smoke.py" -v
 python tests/test_trade.py
 python tests/test_shim.py
-python -m unittest tests.test_analytics tests.test_broker tests.test_factors tests.test_ml tests.test_optimize tests.test_overfit tests.test_walkforward -v
+python -m unittest tests.test_analytics tests.test_broker tests.test_factors tests.test_live tests.test_ml tests.test_ml_models tests.test_optimize tests.test_overfit tests.test_qlib_bridge tests.test_reconcile tests.test_walkforward -v
 ```
 
 ## Pull Request 说明

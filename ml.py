@@ -132,7 +132,13 @@ def predict_ridge(model: dict, X) -> np.ndarray:
 def walk_forward_predict(features: dict[str, pd.DataFrame], fwd: pd.DataFrame,
                          train_size: int, test_size: int, step: int | None = None,
                          purge: int = 0, embargo: int = 0,
-                         expanding: bool = False, alpha: float = 1.0) -> pd.DataFrame:
+                         expanding: bool = False, alpha: float = 1.0,
+                         model: str = "ridge", model_params: dict | None = None) -> pd.DataFrame:
+    if model != "ridge":
+        import ml_models
+        if not ml_models.available(model):
+            raise RuntimeError(
+                f"模型 {model} 不可用；请安装可选依赖：pip install '.[ml]'")
     if not features:
         raise ValueError("features 不能为空")
     index = None
@@ -155,12 +161,20 @@ def walk_forward_predict(features: dict[str, pd.DataFrame], fwd: pd.DataFrame,
         X, y = _train_matrix(features, fwd, train_dates, codes)
         if len(X) < max(10, len(features) + 2):
             continue
-        model = fit_ridge(X, y, alpha)
+        if model == "ridge":
+            fitted = fit_ridge(X, y, alpha)
+        else:
+            import ml_models
+            fitted = ml_models.fit_model(model, X, y, model_params)
         for date in test_dates:
             kept, Xt = _feature_matrix(features, date, codes)
             if not kept:
                 continue
-            pred = predict_ridge(model, Xt)
+            if model == "ridge":
+                pred = predict_ridge(fitted, Xt)
+            else:
+                import ml_models
+                pred = ml_models.predict_model(fitted, Xt)
             for code, score in zip(kept, pred):
                 rows.append({"date": date, "code": code,
                              "score": float(score), "split": split["split"]})
@@ -173,14 +187,15 @@ def walk_forward_predict(features: dict[str, pd.DataFrame], fwd: pd.DataFrame,
 def run_ml(data_dir, feature_spec="momentum:20,volatility:20,ma_gap:20",
            horizon=5, train_size=252, test_size=63, step=None,
            purge=None, embargo=0, expanding=False, alpha=1.0,
-           out_dir="out/ml") -> dict:
+           out_dir="out/ml", model="ridge", model_params=None) -> dict:
     specs = parse_feature_spec(feature_spec)
     features = build_features(data_dir, specs)
     close = factors.load_close_panel(data_dir)
     fwd = factors.forward_returns(close, horizon)
     effective_purge = int(horizon if purge is None else purge)
     signal = walk_forward_predict(features, fwd, train_size, test_size, step,
-                                  effective_purge, embargo, expanding, alpha)
+                                  effective_purge, embargo, expanding, alpha,
+                                  model=model, model_params=model_params)
     if signal.empty:
         raise ValueError("没有生成任何样本外预测")
     out = Path(out_dir)
@@ -199,6 +214,7 @@ def run_ml(data_dir, feature_spec="momentum:20,volatility:20,ma_gap:20",
         "embargo": int(embargo),
         "expanding": bool(expanding),
         "alpha": float(alpha),
+        "model": str(model),
         "predictions": int(len(signal)),
         "dates": int(signal["date"].nunique()),
         "codes": int(signal["code"].nunique()),
@@ -224,10 +240,15 @@ def main(argv=None):
     ap.add_argument("--embargo", type=int, default=0)
     ap.add_argument("--expanding", action="store_true")
     ap.add_argument("--alpha", type=float, default=1.0)
+    ap.add_argument("--model", default="ridge",
+                    choices=["ridge", "sklearn-ridge", "sklearn-hgb", "lightgbm"])
+    ap.add_argument("--model-params", default=None, help="模型参数 JSON")
     ap.add_argument("--out", default="out/ml")
     a = ap.parse_args(argv)
+    model_params = json.loads(a.model_params) if a.model_params else None
     result = run_ml(a.data, a.features, a.horizon, a.train_size, a.test_size,
-                    a.step, a.purge, a.embargo, a.expanding, a.alpha, a.out)
+                    a.step, a.purge, a.embargo, a.expanding, a.alpha, a.out,
+                    model=a.model, model_params=model_params)
     print(json.dumps(result["summary"], ensure_ascii=False, indent=2))
     print(f"  signal: {Path(result['out']) / 'signal.csv'}")
     return 0

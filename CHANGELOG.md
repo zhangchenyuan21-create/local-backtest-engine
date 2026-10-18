@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.6.0
+
+- Add optional `ml_models.py` for sklearn Ridge/HistGradientBoosting and LightGBM; Ridge remains the default.
+- Add `reconcile.py` for read-only PaperBroker vs THS order/fill reconciliation.
+- Add `qlib_bridge.py` for Qlib-friendly CSV export and prediction-signal import.
+- Add `live/` dry-run-by-default VN.PY and QMT adapter skeletons with lazy SDK imports.
+- Default `runner_main.py run` and `jqdata/trade.py` behavior remains unchanged.
+- Tests: 43 execution, 45 jqdata shim, 4 smoke, 35 research/broker/Qlib/live (1 optional ML dependency may skip).
+
 ## v0.5.0
 
 - Add `broker.py`: broker protocol, in-memory PaperBroker, and lazy ThsSimBroker adapter (dry-run by default).

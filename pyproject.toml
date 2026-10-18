@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jq-local-backtest-engine"
-version = "0.5.0"
-description = "A local JoinQuant-compatible backtest engine with A-share execution constraints, research metrics, factor evaluation, walk-forward ML signals, overfitting diagnostics and paper trading brokers."
+version = "0.6.0"
+description = "A local JoinQuant-compatible backtest engine with A-share execution constraints, research metrics, factor evaluation, walk-forward ML signals, overfitting diagnostics and paper trading brokers, reconciliation, Qlib CSV bridges and optional live adapters."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -16,11 +16,16 @@ dependencies = [
   "pyarrow>=12.0",
 ]
 
+[project.optional-dependencies]
+ml = ["scikit-learn>=1.3", "lightgbm>=4.0"]
+qlib = ["pyqlib>=0.9"]
+live = ["vnpy>=3.0"]
+
 [project.urls]
 Homepage = "https://github.com/zhangchenyuan21-create/local-backtest-engine"
 Repository = "https://github.com/zhangchenyuan21-create/local-backtest-engine"
 Issues = "https://github.com/zhangchenyuan21-create/local-backtest-engine/issues"
 
 [tool.setuptools]
-py-modules = ["runner", "runner_main", "analytics", "broker", "factors", "ml", "overfit", "optimize", "paper_trade", "walkforward"]
-packages = ["jqdata"]
+py-modules = ["runner", "runner_main", "analytics", "broker", "factors", "ml", "ml_models", "overfit", "optimize", "paper_trade", "qlib_bridge", "reconcile", "walkforward"]
+packages = ["jqdata", "live"]
