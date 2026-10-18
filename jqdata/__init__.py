@@ -43,7 +43,7 @@ import datetime as dt
 import os
 import sys
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 # 本地数据根目录
 DATA_ROOT = os.environ.get(

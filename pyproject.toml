@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jq-local-backtest-engine"
-version = "0.4.0"
-description = "A local JoinQuant-compatible backtest engine with A-share execution constraints, research metrics, factor evaluation, walk-forward ML signals and overfitting diagnostics."
+version = "0.5.0"
+description = "A local JoinQuant-compatible backtest engine with A-share execution constraints, research metrics, factor evaluation, walk-forward ML signals, overfitting diagnostics and paper trading brokers."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -22,5 +22,5 @@ Repository = "https://github.com/zhangchenyuan21-create/local-backtest-engine"
 Issues = "https://github.com/zhangchenyuan21-create/local-backtest-engine/issues"
 
 [tool.setuptools]
-py-modules = ["runner", "runner_main", "analytics", "factors", "ml", "overfit", "optimize", "walkforward"]
+py-modules = ["runner", "runner_main", "analytics", "broker", "factors", "ml", "overfit", "optimize", "paper_trade", "walkforward"]
 packages = ["jqdata"]

@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.5.0
+
+- Add `broker.py`: broker protocol, in-memory PaperBroker, and lazy ThsSimBroker adapter (dry-run by default).
+- Add `paper_trade.py`: signal-driven paper replay with T+1, lot sizing, price limits, volume participation and fees.
+- Default `runner_main.py run` and `jqdata/trade.py` behavior remains unchanged.
+- Tests: 43 execution, 45 jqdata shim, 4 smoke, 24 analytics/broker/factors/ml/optimize/overfit/walkforward.
+
 ## v0.4.0
 
 - Add `ml.py`: walk-forward Ridge training, out-of-sample `signal.csv` / `signal.parquet`, `ml_summary.json`.

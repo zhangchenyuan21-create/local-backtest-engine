@@ -21,6 +21,7 @@
 - v0.2.0：绩效/风险报告、因子 IC/分层评价、参数网格搜索
 - v0.3.0：Walk-forward、purge/embargo、PSR/Deflated Sharpe 过拟合诊断
 - v0.4.0：Walk-forward ML 信号生成，可选接入现有回测
+- v0.5.0：PaperBroker 回放与同花顺模拟盘 dry-run 适配器
 - 输出 `equity.csv`、`fills.csv`、`run.log` 等可审计产物
 - 数据目录可切换，便于对比不同数据源
 
@@ -144,7 +145,7 @@ python runner_main.py compare `
 
 对账指标和口径写在 `runner_main.py` 顶部注释里。
 
-## 研究工具（v0.4.0）
+## 研究工具（v0.5.0）
 
 以下工具只读取回测产物，不改变 `runner_main.py run` 的撮合行为。
 
@@ -258,6 +259,43 @@ python runner_main.py run `
 
 `examples/signal_strategy.py` 会在每个交易日选择 score 最高的 N 只股票等权持有。信号只包含测试期日期，默认 `purge=horizon`，避免标签跨训练/测试边界。没有显式使用这个策略或信号文件时，现有回测路径完全不受影响。
 
+### PaperBroker / 模拟交易
+
+PaperBroker 用本地日线回放 `signal.csv`，执行 T+1、整手、涨跌停、成交量约束和费用：
+
+```powershell
+python -m paper_trade `
+  --signal out/ml/signal.csv `
+  --data data `
+  --start 2022-01-01 `
+  --end 2024-12-31 `
+  --cash 350000 `
+  --top-n 5 `
+  --out out/paper
+```
+
+输出：
+
+```text
+out/paper/
+  paper_equity.csv
+  paper_orders.csv
+  paper_fills.csv
+  paper_summary.json
+```
+
+同花顺模拟盘适配器默认 **dry-run**，不会提交真实委托：
+
+```python
+from broker import ThsSimBroker
+
+b = ThsSimBroker.from_config(dry_run=True)
+print(b.health())
+print(b.get_account())
+```
+
+确认策略、风控和账户后，才显式传入 `dry_run=False`。`ths_sim` 配置、Cookie 和账户号不会进入本仓库；没有安装或配置 `ths_sim` 时，普通回测完全不受影响。
+
 ## 输出
 
 一次回测至少产生：
@@ -289,10 +327,12 @@ runner.py            回测驱动器：加载策略、逐日循环、撮合、�
 runner_main.py       命令行：run / compare / status
 analytics.py         绩效与风险指标、Markdown/HTML 报告
 factors.py           因子计算、IC、分层、多空和换手
+broker.py            Broker 抽象、PaperBroker、ThsSimBroker 适配器
 ml.py                Walk-forward Ridge 信号生成
 overfit.py           PSR / Deflated Sharpe 过拟合诊断
 optimize.py          参数网格/策略变体批量回测
 walkforward.py       时间切分、训练选参、样本外评估
+paper_trade.py       PaperBroker 信号回放
 examples/signal_strategy.py  使用 signal.csv 的可选策略
 jqdata/              聚宽 API 替身与本地数据访问层
   api.py             get_price / attribute_history / 财务查询等
@@ -311,10 +351,10 @@ tests/               自检与撮合回归测试
 python tests/test_shim.py
 python tests/test_trade.py
 python -m unittest discover -s tests -p "test_smoke.py" -v
-python -m unittest tests.test_analytics tests.test_factors tests.test_ml tests.test_optimize tests.test_overfit tests.test_walkforward -v
+python -m unittest tests.test_analytics tests.test_broker tests.test_factors tests.test_ml tests.test_optimize tests.test_overfit tests.test_walkforward -v
 ```
 
-`test_trade.py` 使用自造数据测试撮合链路，不访问网络。`test_shim.py` 验证替身 API 契约和导入链。`test_analytics.py`、`test_factors.py`、`test_ml.py`、`test_optimize.py`、`test_overfit.py`、`test_walkforward.py` 验证新增研究工具。
+`test_trade.py` 使用自造数据测试撮合链路，不访问网络。`test_shim.py` 验证替身 API 契约和导入链。`test_analytics.py`、`test_broker.py`、`test_factors.py`、`test_ml.py`、`test_optimize.py`、`test_overfit.py`、`test_walkforward.py` 验证新增研究工具和 broker 层。
 
 ## 数据与代码边界
 
@@ -351,5 +391,5 @@ python tests/test_trade.py
 
 Limit prices are derived from the local previous close and board-specific percentages. With qfq (adjusted) data they are research approximations, not live-order prices.
 
-Current regression: 43/43 execution, 45/45 jqdata shim, 4/4 smoke, 20/20 analytics/factors/ml/optimize/overfit/walkforward.
+Current regression: 43/43 execution, 45/45 jqdata shim, 4/4 smoke, 24/24 analytics/broker/factors/ml/optimize/overfit/walkforward.
 Release: https://github.com/zhangchenyuan21-create/local-backtest-engine/releases
