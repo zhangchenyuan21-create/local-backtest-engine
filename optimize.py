@@ -22,6 +22,7 @@ from pathlib import Path
 import pandas as pd
 
 import analytics
+import overfit
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -155,6 +156,8 @@ def run_optimization(strategies=None, template=None, grid=None,
     trials_path = out / "trials.csv"
     trials.to_csv(trials_path, index=False)
     best = ranked[0] if ranked else None
+    if best is not None:
+        best["overfit"] = overfit.summarize_trials(results, objective)
     (out / "best.json").write_text(
         json.dumps(analytics.json_safe(best), ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     return {"objective": objective, "results": results, "ranked": ranked,

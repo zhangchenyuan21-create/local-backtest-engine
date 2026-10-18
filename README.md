@@ -19,6 +19,7 @@
 - 成交量约束：默认最多吃掉当日成交量的 25%，可配置；按整手部分成交
 - 公司行动、停牌和受限持仓台账
 - v0.2.0：绩效/风险报告、因子 IC/分层评价、参数网格搜索
+- v0.3.0：Walk-forward、purge/embargo、PSR/Deflated Sharpe 过拟合诊断
 - 输出 `equity.csv`、`fills.csv`、`run.log` 等可审计产物
 - 数据目录可切换，便于对比不同数据源
 
@@ -142,7 +143,7 @@ python runner_main.py compare `
 
 对账指标和口径写在 `runner_main.py` 顶部注释里。
 
-## 研究工具（v0.2.0）
+## 研究工具（v0.3.0）
 
 以下工具只读取回测产物，不改变 `runner_main.py run` 的撮合行为。
 
@@ -177,6 +178,43 @@ python -m optimize `
 ```
 
 模板中使用 `{{fast}}`、`{{slow}}` 这样的占位符；也可以直接传入一组策略文件。每个变体使用独立子进程和独立输出目录，不会干扰当前正在运行的回测。
+
+### Walk-forward 与过拟合诊断
+
+```powershell
+python -m walkforward `
+  --template variants/demo_template.py `
+  --grid grid.json `
+  --data data `
+  --train-size 252 `
+  --test-size 63 `
+  --step 63 `
+  --purge 5 `
+  --embargo 5 `
+  --out out/walkforward `
+  --objective sharpe `
+  --workers 4
+```
+
+训练期选择参数，测试期只做样本外评估；`purge` 从训练尾部删除样本，`embargo` 跳过训练/测试之间的交易日。输出：
+
+```text
+out/walkforward/
+  variants/
+  runs/
+  walkforward_splits.csv
+  walkforward_summary.json
+  oos_equity.csv
+```
+
+单个 Sharpe 的事后多重试验校正：
+
+```powershell
+python -m overfit --sharpe 1.8 --periods 756 --trials 120
+```
+
+`optimize.py` 的 `best.json` 也会附带 Deflated Sharpe 摘要，用于判断参数搜索是否只是多重试验带来的假显著。
+
 ## 输出
 
 一次回测至少产生：
@@ -208,7 +246,9 @@ runner.py            回测驱动器：加载策略、逐日循环、撮合、�
 runner_main.py       命令行：run / compare / status
 analytics.py         绩效与风险指标、Markdown/HTML 报告
 factors.py           因子计算、IC、分层、多空和换手
+overfit.py           PSR / Deflated Sharpe 过拟合诊断
 optimize.py          参数网格/策略变体批量回测
+walkforward.py       时间切分、训练选参、样本外评估
 jqdata/              聚宽 API 替身与本地数据访问层
   api.py             get_price / attribute_history / 财务查询等
   trade.py           组合、订单、费用、T+1、成交
@@ -226,10 +266,10 @@ tests/               自检与撮合回归测试
 python tests/test_shim.py
 python tests/test_trade.py
 python -m unittest discover -s tests -p "test_smoke.py" -v
-python -m unittest tests.test_analytics tests.test_factors tests.test_optimize -v
+python -m unittest tests.test_analytics tests.test_factors tests.test_optimize tests.test_overfit tests.test_walkforward -v
 ```
 
-`test_trade.py` 使用自造数据测试撮合链路，不访问网络。`test_shim.py` 验证替身 API 契约和导入链。`test_analytics.py`、`test_factors.py`、`test_optimize.py` 验证新增研究工具。
+`test_trade.py` 使用自造数据测试撮合链路，不访问网络。`test_shim.py` 验证替身 API 契约和导入链。`test_analytics.py`、`test_factors.py`、`test_optimize.py`、`test_overfit.py`、`test_walkforward.py` 验证新增研究工具。
 
 ## 数据与代码边界
 
@@ -266,5 +306,5 @@ python tests/test_trade.py
 
 Limit prices are derived from the local previous close and board-specific percentages. With qfq (adjusted) data they are research approximations, not live-order prices.
 
-Current regression: 43/43 execution, 45/45 jqdata shim, 4/4 smoke, 11/11 analytics/factors/optimize.
+Current regression: 43/43 execution, 45/45 jqdata shim, 4/4 smoke, 17/17 analytics/factors/optimize/overfit/walkforward.
 Release: https://github.com/zhangchenyuan21-create/local-backtest-engine/releases

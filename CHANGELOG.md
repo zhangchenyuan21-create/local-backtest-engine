@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.3.0
+
+- Add `overfit.py`: PSR, expected maximum Sharpe and Deflated Sharpe Ratio.
+- Add `walkforward.py`: purge/embargo splits, rolling/expanding windows, train-only parameter selection and out-of-sample evaluation.
+- Add Deflated Sharpe diagnostics to `optimize.py` `best.json`.
+- No changes to `runner_main.py run` defaults or execution semantics.
+- Tests: 43 execution, 45 jqdata shim, 4 smoke, 17 analytics/factors/optimize/overfit/walkforward.
+
 ## v0.2.0
 
 - Add `analytics.py`: return/risk metrics, trade FIFO reconstruction, Markdown/JSON/HTML reports.
