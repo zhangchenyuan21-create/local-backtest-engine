@@ -403,10 +403,17 @@ def scan_restricted(ctx, date: str):
                   basis="恢复行情或取得可核实估值后重跑",
                   lot=f"quote_date={qdate}", update=True)
         out.append(rec)
-        if DAYS_RESTRICTED[code] == 1:
-            # ★ 复核第 9 轮：缺行情持仓【首次出现当天】就可能影响其它标的的仓位计算
-            #   ⇒ 最早失效日不一定是换股日，此处即登记（取最早者）
+        # ★ R34（2026-10-19）：改为【每日无条件】登记，幂等且路径无关。
+        #   原因：原实现只在"该股缺行情首日"登记，断点续跑时若已越过该日，
+        #   则永不再登记 ⇒ 续跑臂误报 comparable=True。
+        #   mark_perf_invalid 内部已保证只保留最早日期，故重复调用无副作用。
+        # 普通停牌：用最后有效收盘价估值、禁止交易；不因单日/短期停牌
+        # 把整段回测标记为不可比较。只有 terminated / 无最后价等无法估值的情形
+        # 才沿用严格失效口径。
+        if str(st) != "suspended" or px is None:
             mark_perf_invalid(date, "缺行情持仓（%s）可能影响仓位计算" % code)
+        if DAYS_RESTRICTED[code] == 1:
+            # 日志只在首日输出一次
             log.warn("[受限持仓] %s %s 当日无行情 ⇒ 标记 restricted："
                      "按最后已知收盘价 %s（报价日 %s）挂账，**不可交易、不了结**；"
                      "证券元数据 end_date=%s。若期末仍未解决，本次回测不能用于最终净值裁决。"
@@ -796,3 +803,131 @@ def apply_conversions(ctx, date: str):
             log.error("[公司行动·换股] %s %s 转换失败（%s: %s）⇒ 阻断净值裁决"
                       % (date, code, type(_e).__name__, str(_e)[:80]))
     return out
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 方案③（2026-10-19）：估值口径 与 可交易性 分离
+#   原则：
+#     P1 估值价 ≠ 成交价：估值价只用于记账/风控，【禁止】撮合
+#     P2 停牌股禁止成交，但仍占用资金与风险敞口
+#     P3 复牌后的真实价格跳变与成交约束完整保留
+#     P4 四臂使用同一估值规则（账户层规则，不是信号）
+#     P5 估值替代必须做敏感性核查（last_trade vs index_proxy）
+# ═══════════════════════════════════════════════════════════════════════════
+VAL_BASIS = (os.environ.get("JQSHIM_VAL_BASIS") or "last_trade").strip().lower()
+VAL_STATS = {"market": 0, "last_trade": 0, "index_proxy": 0, "none": 0}
+_MKT_EW = None
+
+
+def _market_ew():
+    """等权市场日收益表 {date: r}（由 build_market_ew.py 生成，本地可复现）。"""
+    global _MKT_EW
+    if _MKT_EW is not None:
+        return _MKT_EW
+    p = os.path.join(_store.DATA_ROOT, "index", "market_ew.json")
+    try:
+        with open(p, encoding="utf-8") as fh:
+            _MKT_EW = json.load(fh)
+    except Exception:
+        _MKT_EW = {}
+    return _MKT_EW
+
+
+def _market_ret(start: str, end: str) -> float:
+    """[start, end] 区间的等权市场累计收益（start 不含，end 含）。"""
+    m = _market_ew()
+    if not m or not start or not end or end <= start:
+        return 0.0
+    acc = 1.0
+    for d, r in m.items():
+        if start < d <= end:
+            acc *= (1.0 + float(r))
+    return acc - 1.0
+
+
+def valuation_price(code: str, date: str, last_px: float | None = None):
+    """【仅供估值】返回 (price, basis)。
+
+    basis ∈ {'market','last_trade','index_proxy','none'}
+      market      当日有行情 ⇒ 当日收盘
+      last_trade  停牌 ⇒ 最后已知价（现状口径，baseline）
+      index_proxy 停牌 ⇒ 最后已知价 × (1 + 等权市场区间收益)（敏感性口径）
+    """
+    px, qdate, st = quote_info(code, date)
+    if st == "ok" and px:
+        VAL_STATS["market"] += 1
+        return float(px), "market"
+    base = px if (px is not None and px > 0) else last_px
+    if base is None or base <= 0:
+        VAL_STATS["none"] += 1
+        return None, "none"
+    if VAL_BASIS == "index_proxy" and qdate:
+        r = _market_ret(qdate, date)
+        VAL_STATS["index_proxy"] += 1
+        return float(base) * (1.0 + r), "index_proxy"
+    VAL_STATS["last_trade"] += 1
+    return float(base), "last_trade"
+
+
+def tradable_price(code: str, date: str):
+    """【仅供成交】当日无行情一律返回 None ⇒ 禁止成交（估值价永不用来撮合）。"""
+    px, _qdate, st = quote_info(code, date)
+    return px if st == "ok" else None
+
+
+def val_stats():
+    return dict(VAL_STATS)
+
+
+def reset_val_stats():
+    for k in VAL_STATS:
+        VAL_STATS[k] = 0
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ★ R37（2026-10-19）：续跑所需的审计状态序列化
+#   runner.load_checkpoint 通过 hasattr(_cam, "load_state") 判断是否调用，
+#   此前本模块没有这两个函数 ⇒ 恢复被静默跳过 ⇒ invalid_from 偏移到续跑点。
+# ══════════════════════════════════════════════════════════════════════════
+
+_SERIAL_KEYS = ("PERF_INVALID_FROM", "RESTR_OPEN", "DAYS_RESTRICTED",
+                "LOCKED_AT_END", "LOCKED_LOGGED", "EVENTS", "EVENT_IDS")
+
+
+def save_state() -> dict:
+    """导出可 pickle 的审计状态（只导出本模块确实存在的全局量）。"""
+    import copy
+    g = globals()
+    out = {}
+    for k in _SERIAL_KEYS:
+        if k in g:
+            try:
+                out[k] = copy.deepcopy(g[k])
+            except Exception:
+                pass
+    return out
+
+
+def load_state(d: dict) -> None:
+    """恢复审计状态；缺键跳过、类型不符跳过，绝不抛出。"""
+    if not isinstance(d, dict):
+        return
+    g = globals()
+    for k in _SERIAL_KEYS:
+        if k not in d or k not in g:
+            continue
+        v = d[k]
+        try:
+            tgt = g[k]
+            if isinstance(tgt, dict) and isinstance(v, dict):
+                tgt.clear()
+                tgt.update(v)
+            elif isinstance(tgt, set) and isinstance(v, (set, list, tuple)):
+                tgt.clear()
+                tgt.update(v)
+            elif isinstance(tgt, list) and isinstance(v, (list, tuple)):
+                tgt.clear()
+                tgt.extend(v)
+            else:
+                g[k] = v
+        except Exception:
+            continue

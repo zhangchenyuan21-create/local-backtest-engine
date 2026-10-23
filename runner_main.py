@@ -4,8 +4,8 @@
 用法
 ═══════════════════════════════════════════════════════════════════════════
   # 跑回测
-  python runner_main.py run --strategy ../joinquant_strategy_AB_F.py --cash 350000
-  python runner_main.py run --strategy ../joinquant_strategy_AB_A.py --start 2020-01-01
+  python runner_main.py run --strategy examples/demo_strategy.py --cash 350000
+  python runner_main.py run --strategy examples/demo_strategy.py --start 2020-01-01
 
   # 与聚宽结果对账（关键：决定本地引擎能否被信任）
   python runner_main.py compare --out out/F \
@@ -52,6 +52,13 @@ def cmd_run(a):
     import runner as R
     from jqdata import store, sector as S
 
+    if not a.strategy and not a.replay_signals:
+        print("  ✗ 需要 --strategy，或使用 --replay-signals 指定信号缓存")
+        return 2
+    if a.record_signals and a.replay_signals:
+        print("  ✗ --record-signals 与 --replay-signals 不能同时使用")
+        return 2
+
     print("=" * 88)
     print("本地回测")
     print("=" * 88)
@@ -70,16 +77,44 @@ def cmd_run(a):
         print(f"\n  ✗ 输出目录已存在：{a.out}（加 --force 覆盖）")
         return 1
 
+    if getattr(a, "legacy", False):
+        os.environ["JQSHIM_FAST"] = "0"
+    if getattr(a, "no_native", False):
+        os.environ["JQSHIM_NATIVE"] = "0"
+    elif getattr(a, "native", False):
+        os.environ["JQSHIM_NATIVE"] = "1"
+    if getattr(a, "perf", False):
+        os.environ["JQSHIM_PERF"] = "1"
+    try:
+        from jqdata.fastcore import config as _fc, native as _fcn
+        print(f"  fast={_fc.fast_enabled()} native={_fcn.backend_name()} "
+              f"backend={_fcn.backend_info()}")
+    except Exception as _e:
+        print(f"  fastcore unavailable: {_e}")
+
     logf = os.path.join(a.out, "run.log") if a.out else None
     bt = R.Backtest(
         a.strategy, cash=a.cash, start=a.start, end=a.end,
         fill_mode=a.fill_mode, strict_no_future=a.strict_no_future,
-        log_file=logf, quiet=a.quiet)
+        log_file=logf, quiet=(a.quiet or getattr(a, "perf", False)),
+        record_signals=a.record_signals, replay_signals=a.replay_signals,
+        perf_mode=getattr(a, "perf", False),
+        no_audit=getattr(a, "no_audit", False),
+        phase_timing=getattr(a, "phase_timing", False))
+    # ── 方案④：断点续跑接线 ──
+    _ckp = a.checkpoint_path or (os.path.join(a.out, "ckpt.pkl") if a.out else None)
+    if _ckp:
+        bt._ck_path = _ckp
+    if getattr(a, "resume", None):
+        bt._resume_path = a.resume
+    if getattr(a, "checkpoint_every", 0):
+        bt._ck_every = int(a.checkpoint_every)
     print(f"\n  策略 {bt.strategy_name}")
     print(f"  区间 {bt.cal[0]} ~ {bt.cal[-1]}（{len(bt.cal)} 个交易日）")
     print(f"  资金 {a.cash:,.0f}   成交模式 {a.fill_mode}"
           f"   严格防未来 {a.strict_no_future}")
     print()
+    bt.outdir = a.out
     bt.run()
 
     eq, fl = bt.to_frames()
@@ -402,7 +437,7 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("run", help="跑回测")
-    r.add_argument("--strategy", required=True, help="策略 .py 路径")
+    r.add_argument("--strategy", required=False, default=None, help="策略 .py 路径（回放模式可省略）")
     r.add_argument("--cash", type=float, default=350000.0)
     r.add_argument("--start", default=None)
     r.add_argument("--end", default=None)
@@ -414,6 +449,23 @@ def main(argv=None):
     r.add_argument("--quiet", action="store_true", help="不打印日志到屏幕")
     r.add_argument("--force", action="store_true", help="允许覆盖输出目录")
     r.add_argument("--report", action="store_true", help="回测完成后生成综合分析报告")
+    r.add_argument("--legacy", action="store_true", help="关闭 fast path（A/B 对照）")
+    r.add_argument("--native", action="store_true", help="强制启用 native backend")
+    r.add_argument("--no-native", action="store_true", help="关闭 native backend（1-4 版本）")
+    r.add_argument("--perf", action="store_true", help="性能模式：抑制 INFO 日志")
+    r.add_argument("--no-audit", action="store_true", help="跳过只读审计扫描（性能对照用）")
+    r.add_argument("--phase-timing", action="store_true", help="写出 phase_timing.json")
+    r.add_argument("--record-signals", default=None, metavar="PATH",
+                   help="记录下单信号到 CSV（用于后续 replay）")
+    r.add_argument("--replay-signals", default=None, metavar="PATH",
+                   help="回放已记录的信号 CSV（跳过策略 initialize/定时任务）")
+    # ── 方案④：断点续跑 ──
+    r.add_argument("--resume", default=None,
+                   help="从检查点续跑（.pkl 路径）")
+    r.add_argument("--checkpoint-every", type=int, default=0,
+                   help="每 N 个交易日写一次检查点（0=不写）")
+    r.add_argument("--checkpoint-path", default=None,
+                   help="检查点路径（默认 <out>/ckpt.pkl）")
     r.set_defaults(func=cmd_run)
 
     c = sub.add_parser("compare", help="与聚宽结果对账")

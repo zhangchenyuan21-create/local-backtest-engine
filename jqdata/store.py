@@ -378,6 +378,79 @@ def rows_asof(codes, end_date: str):
     return out
 
 
+_EXTRA = {}
+_EXTRA_MAX = int(os.environ.get("JQSHIM_EXTRA_CACHE_MAX", "6000"))
+
+
+def extra_arrays(code: str, fields):
+    """Lazily cache float64 columns that are not in SNAP_FIELDS.
+
+    The cache is keyed by *code*, not by the requested field tuple: the same
+    stock is queried with ["close"] on one day and ["open","high","low",
+    "close"] on another.  Merging fields into one per-code record avoids a
+    second parquet read (and the cache thrash that caused the first version of
+    this fast path to be slower than legacy).
+    """
+    fields = tuple(dict.fromkeys(str(f) for f in fields))
+    hit = _EXTRA.get(code)
+    if hit is None:
+        dates, cols = None, {}
+    else:
+        dates, cols = hit
+        _EXTRA.pop(code, None)
+        _EXTRA[code] = hit          # LRU touch
+    missing = [f for f in fields if f not in cols]
+    if dates is None or missing:
+        p = daily_path(code)
+        if not os.path.exists(p):
+            return None, None
+        try:
+            import pyarrow.parquet as pq
+            avail = set(pq.ParquetFile(p).schema.names)
+            want = missing if dates is not None else list(fields)
+            use = ["date"] + [f for f in want if f in avail]
+            if len(use) <= 1:
+                if dates is None:
+                    return None, None
+            else:
+                df = pd.read_parquet(p, columns=use)
+                if df is None or df.empty:
+                    return None, None
+                df = df.sort_values("date")
+                new_dates = df["date"].astype(str).to_numpy()
+                if dates is not None and len(new_dates) != len(dates):
+                    # Rare schema/date mismatch: rebuild all requested fields.
+                    dates, cols = None, {}
+                    df = pd.read_parquet(p)
+                    df = df.sort_values("date")
+                    new_dates = df["date"].astype(str).to_numpy()
+                    want = list(fields)
+                dates = new_dates
+                for f in want:
+                    if f in df.columns:
+                        cols[f] = pd.to_numeric(df[f], errors="coerce").to_numpy(
+                            dtype="float64", na_value=float("nan"))
+        except Exception:
+            try:
+                df = pd.read_parquet(p).sort_values("date")
+                dates = df["date"].astype(str).to_numpy()
+                for f in fields:
+                    if f in df.columns:
+                        cols[f] = pd.to_numeric(df[f], errors="coerce").to_numpy(
+                            dtype="float64", na_value=float("nan"))
+            except Exception:
+                return None, None
+        # Fill unavailable requested fields with NaN so a repeated call does
+        # not re-read the parquet file.
+        for f in fields:
+            if f not in cols:
+                cols[f] = np.full(len(dates), np.nan, dtype=np.float64)
+        _EXTRA[code] = (dates, cols)
+        while len(_EXTRA) > _EXTRA_MAX:
+            _EXTRA.pop(next(iter(_EXTRA)), None)
+    return dates, {f: cols[f] for f in fields if f in cols}
+
+
 def slice_daily(code: str, end_date: str, count: int) -> pd.DataFrame | None:
     """取 (code, 截至 end_date 的最近 count 根) 日线。按日期截断，无未来数据。
 
@@ -491,7 +564,7 @@ def index_members_asof(index_code: str, date: str) -> list[str]:
 # 后果：板块资金层整层全灭（门槛 -0.000 亿，各板块 -0.00 亿），候选全部被挡。
 # 处理：读入时乘回 1e4（写回时除回去），parquet 永久保持 Tushare 原始口径。
 # 若将来数据改为直接存元，把本常数改为 1.0 即可（save_flow 会自动对称）。
-FLOW_RAW_SCALE = 1e4
+FLOW_RAW_SCALE = float(os.environ.get("JQSHIM_FLOW_RAW_SCALE", "1e4"))
 _FLOW_SCALED_COLS = ("netamount", "r0_net")
 
 

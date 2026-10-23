@@ -33,6 +33,7 @@ import math
 from decimal import Decimal, ROUND_HALF_UP
 
 from . import CONTEXT, normalize_code, store
+from . import corpaction as _ca          # 方案③：估值口径（mark_price 用）
 from . import jqlog as log
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -125,15 +126,30 @@ class Portfolio:
         self.available_cash = float(cash)
         self.positions = {}
         self._price_cache = {}
+        self.susp_value = 0.0       # 停牌/受限持仓的估值市值
+        self.susp_n = 0             # 停牌/受限持仓只数
 
     # ---- 估值 ----
     def mark_price(self, date: str | None = None):
-        """按当收盘价给全部持仓估值。"""
+        """按当日估值口径给持仓估值（方案③）。
+
+        · 有当日行情 ⇒ market：当日收盘
+        · 停牌       ⇒ last_trade：最后已知价（baseline）
+                       index_proxy：最后已知价 ×(1+等权市场区间收益)（敏感性）
+        · 同时记录停牌持仓的市值与只数，供 L0/L1/L2 分级裁决使用
+        ★ 估值价只写 pos.price，不参与任何撮合。
+        """
+        self.susp_value = 0.0
+        self.susp_n = 0
         for code, pos in self.positions.items():
-            px = _close_on(code, date) if date else None
+            px, basis = _ca.valuation_price(code, date, pos.price or pos.cost_basis)
             if px is None or px != px:
                 px = pos.price or pos.cost_basis
+                basis = "none"
             pos.price = float(px)
+            if date and basis in ("last_trade", "index_proxy"):
+                self.susp_value += pos.value
+                self.susp_n += 1
 
     @property
     def positions_value(self):
@@ -144,10 +160,15 @@ class Portfolio:
         return self.available_cash + self.positions_value
 
     def snapshot(self):
+        tv = self.total_value
+        sv = getattr(self, "susp_value", 0.0) or 0.0
         return {"cash": self.available_cash,
                 "positions_value": self.positions_value,
-                "total_value": self.total_value,
-                "n_pos": len(self.positions)}
+                "total_value": tv,
+                "n_pos": len(self.positions),
+                "susp_value": sv,
+                "susp_weight": (sv / tv) if tv else 0.0,
+                "val_basis": _ca.VAL_BASIS}
 
 
 def _close_on(code: str, date: str):
@@ -571,8 +592,8 @@ def closeable_of(pos, date: str) -> int:
     return int(n)
 
 
-def execute_sell(code, qty, date):
-    """按 date 的开盘价卖出 qty 股。返回成交字典或 None。
+def execute_sell(code, qty, date, ref_px=None):
+    """按 date 的开盘价卖出 qty 股；ref_px 用于期末收盘结算。返回成交字典或 None。
 
     执行约束：
       - 停牌不成交
@@ -612,7 +633,7 @@ def execute_sell(code, qty, date):
                  % (date, code, qty, capped))
         qty = min(qty, capped)
     try:
-        px = float(bar.get("open"))
+        px = float(ref_px) if ref_px is not None else float(bar.get("open"))
     except (TypeError, ValueError):
         px = 0.0
     if px <= 0:
@@ -656,10 +677,30 @@ def _pending():
     return c.pending_orders
 
 
+def _append_pending(code, qty, source="order"):
+    """Append an order intent and mirror it into the signal recorder.
+
+    Recording at this single choke point captures every jqdata order API
+    (order / order_value / order_target / order_target_value /
+    order_target_percent) without changing their semantics.
+    """
+    qty = int(qty)
+    _pending().append({"code": code, "qty": qty})
+    c = CONTEXT
+    rec = getattr(c, "signal_recorder", None) if c is not None else None
+    if rec is not None:
+        try:
+            dt_obj = getattr(c, "current_dt", None)
+            t = dt_obj.strftime("%H:%M:%S") if hasattr(dt_obj, "strftime") else "00:00:00"
+        except Exception:
+            t = "00:00:00"
+        rec.record(getattr(c, "current_date", ""), t, code, qty, source=source)
+
+
 def order(security, amount, style=None, side=False, **kw):
     """正数买入，负数卖出。"""
     code = normalize_code(security)
-    _pending().append({"code": code, "qty": int(amount)})
+    _append_pending(code, int(amount), source="order")
     return _mk_order(code, amount)
 
 
@@ -706,7 +747,7 @@ def order_value(security, value, style=None, side=False, **kw):
     if not px:
         return None
     qty = int(value / px // 100 * 100)
-    _pending().append({"code": code, "qty": qty})
+    _append_pending(code, qty, source="order_value")
     return _mk_order(code, qty)
 
 
@@ -727,7 +768,7 @@ def order_target(security, amount, style=None, side=False, **kw):
     d = int(amount) - (cur + pend)
     if d == 0:
         return None
-    _pending().append({"code": code, "qty": d})
+    _append_pending(code, d, source="order_target")
     return _mk_order(code, d)
 
 
@@ -789,6 +830,34 @@ def flush_orders(date: str):
             f = None
         if f:
             fills.append(f)
+    return fills
+
+
+def flush_orders_at_close(date: str):
+    """回测最后一日的收盘强制结算。
+
+    只结算【卖单】；买单在期末没有可验证的下一日开盘，直接取消。
+    这样 09:31 产生的清仓单不会因为回测恰好在当日结束而永远留在 pending。
+    """
+    fills = []
+    orders = list(_pending())
+    _pending_clear()
+    for o in orders:
+        code, qty = o["code"], o["qty"]
+        if qty >= 0:
+            log.warn("[期末结算] %s 取消期末未成交买单 %s %d 股"
+                     % (date, code, qty))
+            continue
+        px = _close_on(code, date)
+        f = execute_sell(code, -qty, date, ref_px=px)
+        if f:
+            f["forced_end"] = True
+            f["exit_reason"] = "end_of_backtest_close"
+            fills.append(f)
+        else:
+            log.warn("[期末结算] %s 卖单未成交（收盘价或可卖量不足）" % code)
+    if fills:
+        log.warn("[期末结算] %s 强制结算未成交卖单 %d 笔" % (date, len(fills)))
     return fills
 
 

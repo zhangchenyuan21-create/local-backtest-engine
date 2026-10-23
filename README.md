@@ -24,6 +24,7 @@
 - v0.5.0：PaperBroker 回放与同花顺模拟盘 dry-run 适配器
 - v0.6.0：可选 LightGBM/sklearn 模型、Paper/THS 对账、Qlib CSV 桥接、vnpy/QMT dry-run 适配器
 - v0.7.0：回测后综合分析报告，覆盖绩效、因子、优化、Walk-forward、ML、Paper 和对账证据
+- v0.8.0：Tushare 数据根兼容、断点续跑/检查点、估值与可交易性分离、信号记录/回放与 NumPy fast path
 - 输出 `equity.csv`、`fills.csv`、`run.log` 等可审计产物
 - 数据目录可切换，便于对比不同数据源
 
@@ -82,6 +83,39 @@ data/
 
 `daily/*.parquet` 的 `volume` 必须是**股数**，不是手数。成交量上限按 `volume × order_volume_ratio` 计算；若数据源给的是手数，请先乘以 100。
 
+#### 使用 Tushare 数据
+
+引擎本身不抓 Tushare，也不包含数据；只要把 Tushare 落盘的 parquet/json 按下面的目录组织，就可以用环境变量切换过去（代码统一为 `000001.XSHE` 格式）：
+
+```text
+data_ts/
+  daily/<code>.parquet         不复权日线（date/open/high/low/close/volume/amount/turn/pctChg/peTTM/pbMRQ 等）
+  daily_qfq/<code>.parquet     前复权日线
+  financial/<code>.parquet     季频财务（含 pubDate）
+  moneyflow/<code>.parquet     Tushare moneyflow（netamount/r0_net 等）
+  index/<index>.json
+  sector/sw_l1.json
+  sector/concept.json
+  calendar.json
+  securities.json
+```
+
+```powershell
+$env:JQSHIM_DATA           = "D:\tushare_data"
+$env:JQSHIM_DAILY_DIR      = "D:\tushare_data\daily"
+$env:JQSHIM_QFQ_DIR        = "D:\tushare_data\daily_qfq"
+$env:JQSHIM_SECTOR_DIR     = "D:\tushare_data\sector"
+# 可选
+$env:JQSHIM_NEWDATA_ROOT   = "D:\tushare_data"   # sector 目录的兜底根
+$env:JQSHIM_FLOW_RAW_SCALE = "1e4"                # Tushare 资金流原始单位=万元；若已是元则设 1
+$env:JQSHIM_NO_QFQ         = "1"                  # 强制不复权（诊断用）
+$env:JQSHIM_KEEP_BJSE      = "1"                  # 保留北交所（默认剔除）
+```
+
+- `moneyflow` 里的 `netamount` / `r0_net` 默认按 Tushare 的**万元**口径读入；若你的 parquet 已经存成元，设 `JQSHIM_FLOW_RAW_SCALE=1`。
+- `daily/*.parquet` 的 `volume` 必须是**股数**，不是手数。
+- 仓库不包含任何 Tushare token、账号或行情文件；请只在本机/私有目录保存数据。
+
 ## 执行约束配置
 
 在策略的 `initialize` 里可以设置：
@@ -132,6 +166,14 @@ python runner_main.py run `
 --cash                             初始资金
 --out                              输出目录
 --force                            覆盖已有输出目录
+--record-signals PATH              记录下单信号，供后续回放
+--replay-signals PATH              回放信号（跳过策略 initialize/定时任务）
+--resume PATH                      从 ckpt.pkl 续跑
+--checkpoint-every N               每 N 个交易日写一次检查点
+--checkpoint-path PATH             检查点路径（默认 <out>/ckpt.pkl）
+--perf                             性能模式：降低日志级别、跳过审计扫描
+--legacy                           关闭 fast path，回到旧路径做 A/B
+--native / --no-native             强制开启/关闭 NumPy native backend
 ```
 
 ### 5. 对账
@@ -147,7 +189,7 @@ python runner_main.py compare `
 
 对账指标和口径写在 `runner_main.py` 顶部注释里。
 
-## 研究工具（v0.7.0）
+## 研究工具（v0.8.0）
 
 以下工具只读取回测产物，不改变 `runner_main.py run` 的撮合行为。
 
@@ -378,17 +420,23 @@ It writes `analysis_report.md` and `analysis_report.json` and summarizes metrics
 
 ```text
 out/demo/
-  equity.csv      每日权益、现金、持仓市值、持仓数
+  equity.csv      每日权益、现金、持仓市值、持仓数、停牌估值、估值口径
   fills.csv       逐笔成交、费用、成交后现金
   run.log         运行日志
-  corpaction.json 公司行动/受限持仓摘要（若适用）
+  corpaction.json 公司行动/受限持仓摘要
+  acceptance.json 本次回测准入结论（是否可与其它回测比较）
+  unresolved_ledger.csv 未决受限持仓台账（若有）
+  ckpt.pkl        检查点（启用 --checkpoint-every 时）
+  phase_timing.json 分阶段耗时（启用 --phase-timing/--perf 时）
 ```
 
 `equity.csv` 的字段：
 
 ```text
-date,total_value,positions_value,cash,n_pos
+date,total_value,positions_value,cash,n_pos,susp_value,susp_weight,val_basis
 ```
+
+`susp_value` = 停牌/受限持仓的估值市值；`susp_weight` = 其占总资产比例；`val_basis` = `market` / `last_trade` / `index_proxy` / `none`。
 
 `fills.csv` 的字段：
 
@@ -420,6 +468,7 @@ jqdata/              聚宽 API 替身与本地数据访问层
   trade.py           组合、订单、费用、T+1、成交
   corpaction.py      公司行动与受限持仓
   store.py           parquet/json 数据访问
+  fastcore/          NumPy 截面、资金流预聚合、信号记录/回放
   fetch.py           聚宽 Data API 抓取
   fetch_cli.py       数据抓取 CLI
 examples/            最小策略示例
@@ -432,7 +481,7 @@ tests/               自检与撮合回归测试
 python tests/test_shim.py
 python tests/test_trade.py
 python -m unittest discover -s tests -p "test_smoke.py" -v
-python -m unittest tests.test_analysis_report tests.test_analytics tests.test_broker tests.test_factors tests.test_live tests.test_ml tests.test_ml_models tests.test_optimize tests.test_overfit tests.test_qlib_bridge tests.test_reconcile tests.test_walkforward -v
+python -m unittest tests.test_fastcore tests.test_analysis_report tests.test_analytics tests.test_broker tests.test_factors tests.test_live tests.test_ml tests.test_ml_models tests.test_optimize tests.test_overfit tests.test_qlib_bridge tests.test_reconcile tests.test_walkforward -v
 ```
 
 `test_trade.py` 使用自造数据测试撮合链路，不访问网络。`test_shim.py` 验证替身 API 契约和导入链。`test_analytics.py`、`test_broker.py`、`test_factors.py`、`test_live.py`、`test_ml.py`、`test_ml_models.py`、`test_optimize.py`、`test_overfit.py`、`test_qlib_bridge.py`、`test_reconcile.py`、`test_walkforward.py` 验证研究、broker、Qlib 和 live 适配层。
@@ -468,9 +517,28 @@ python tests/test_trade.py
 
 本项目仅用于量化研究和软件工程学习，不构成投资建议。历史回测不代表未来收益。使用任何数据源和交易接口前，请自行确认其授权、条款和合规要求。JoinQuant/聚宽是其权利人的商标，本项目与聚宽官方无隶属关系。
 
+涨跌停价按本地前收盘价与板块比例推算；使用前复权数据时，它是研究近似，不是实盘报价。
 
+## v0.8.0 更新（2026-10-23）
 
-Limit prices are derived from the local previous close and board-specific percentages. With qfq (adjusted) data they are research approximations, not live-order prices.
+- Tushare 数据目录兼容：`JQSHIM_DATA` + `JQSHIM_DAILY_DIR` / `JQSHIM_QFQ_DIR` / `JQSHIM_SECTOR_DIR`，资金流单位可配置。
+- 断点续跑：`--resume` + `--checkpoint-every` / `--checkpoint-path`；检查点含组合、`g`、equity/fills 和公司行动审计状态。
+- 估值与可交易性分离：停牌持仓按最后价/指数代理估值，但不参与撮合；`equity.csv` 增加 `susp_value` / `susp_weight` / `val_basis`。
+- 期末结算：最后一日收盘强制结算未成交卖单，避免清仓信号丢失。
+- fast path：信号记录/回放、NumPy 截面、资金流预聚合；`--legacy` 可回退。
+- 测试：133 项通过（45 shim + 43 execution + 4 smoke + 4 fastcore + 37 research）。
 
-Current regression: 43/43 execution, 45/45 jqdata shim, 4/4 smoke, 37/37 report/research/broker/Qlib/live tests (1 optional ML dependency skipped when absent).
 Release: https://github.com/zhangchenyuan21-create/local-backtest-engine/releases
+
+
+## 性能改造（2026-10-20）
+
+本版本增加了可选的 fast path：
+
+- `--record-signals PATH` / `--replay-signals PATH`：记录并回放下单信号；
+- 批量 `get_price` / `get_money_flow` 走 NumPy 截面数组；
+- V52 资金流 helper 走预聚合 API；
+- `--perf` / `--no-audit` / `--phase-timing` 用于性能对照；
+- `--legacy` 可退回原路径。
+
+详见 `PERFORMANCE_OPTIMIZATION.md`。

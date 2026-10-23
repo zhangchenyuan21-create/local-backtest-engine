@@ -22,6 +22,8 @@ _COUNTS = Counter()
 _SUPPRESS = set()          # 需要抑制的消息前缀（体积控制）
 _SUPPRESS_LIMIT = 0        # 每个前缀最多输出几条（0 = 不限制）
 _STATS = Counter()
+_LEVEL = "INFO"
+_LEVEL_RANK = {"DEBUG": 10, "INFO": 20, "WARN": 30, "ERROR": 40, "CRIT": 50}
 
 # 默认抑制的刷屏标记（与聚宽侧修过的同类问题）
 DEFAULT_NOISY = (
@@ -29,13 +31,13 @@ DEFAULT_NOISY = (
 )
 
 
-def configure(handlers=None, suppress=None, suppress_limit=0, noisy=None):
+def configure(handlers=None, suppress=None, suppress_limit=0, noisy=None, min_level=None):
     """配置日志。
 
     suppress:      要抑制的消息前缀集合；None 表示用 DEFAULT_NOISY
     suppress_limit: 每个前缀最多输出多少条（0=全部抑制）
     """
-    global _SUPPRESS, _SUPPRESS_LIMIT
+    global _SUPPRESS, _SUPPRESS_LIMIT, _LEVEL
     with _LOCK:
         if handlers is not None:
             _HANDLERS.clear()
@@ -43,6 +45,8 @@ def configure(handlers=None, suppress=None, suppress_limit=0, noisy=None):
         _SUPPRESS = set(noisy if noisy is not None
                         else (DEFAULT_NOISY if suppress is None else suppress))
         _SUPPRESS_LIMIT = int(suppress_limit)
+        if min_level is not None:
+            _LEVEL = str(min_level).upper()
 
 
 def add_handler(fn):
@@ -68,6 +72,10 @@ def _now():
 
 def _emit(level, msg):
     msg = "" if msg is None else str(msg)
+    if _LEVEL_RANK.get(level, 20) < _LEVEL_RANK.get(_LEVEL, 20):
+        with _LOCK:
+            _COUNTS[level] += 1
+        return
     with _LOCK:
         _COUNTS[level] += 1
         for pre in _SUPPRESS:
@@ -91,11 +99,23 @@ def _emit(level, msg):
                 pass
 
 
+def _enabled(level):
+    return _LEVEL_RANK.get(level, 20) >= _LEVEL_RANK.get(_LEVEL, 20)
+
+
 def info(msg, *a):
+    if not _enabled("INFO"):
+        with _LOCK:
+            _COUNTS["INFO"] += 1
+        return
     _emit("INFO", msg % a if a else msg)
 
 
 def warn(msg, *a):
+    if not _enabled("WARN"):
+        with _LOCK:
+            _COUNTS["WARN"] += 1
+        return
     _emit("WARN", msg % a if a else msg)
 
 
@@ -103,6 +123,10 @@ warning = warn
 
 
 def error(msg, *a):
+    if not _enabled("ERROR"):
+        with _LOCK:
+            _COUNTS["ERROR"] += 1
+        return
     _emit("ERROR", msg % a if a else msg)
 
 
@@ -114,8 +138,10 @@ def critical(msg, *a):
     _emit("CRIT", msg % a if a else msg)
 
 
-def set_level(*a, **kw):
-    pass
+def set_level(level="INFO", *a, **kw):
+    global _LEVEL
+    with _LOCK:
+        _LEVEL = str(level).upper()
 
 
 def stats():

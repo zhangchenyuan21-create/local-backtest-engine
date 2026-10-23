@@ -43,7 +43,7 @@ import datetime as dt
 import os
 import sys
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 # 本地数据根目录
 DATA_ROOT = os.environ.get(
@@ -161,7 +161,7 @@ def __getattr__(name):
 # 导出策略会用的全部符号
 from .api import (  # noqa: E402
     attribute_history, get_price, get_all_securities, get_index_stocks,
-    get_trade_days, get_money_flow, get_fundamentals, get_industry,
+    get_trade_days, get_money_flow, get_money_flow_summary, get_fundamentals, get_industry,
     get_security_info, get_extras, get_valuation, get_current_data,
     get_last_price, query,
 )
@@ -188,7 +188,7 @@ indicator = _tables.indicator  # noqa: E402
 
 __all__ = [
     "attribute_history", "get_price", "get_all_securities", "get_index_stocks",
-    "get_trade_days", "get_money_flow", "get_fundamentals", "get_industry",
+    "get_trade_days", "get_money_flow", "get_money_flow_summary", "get_fundamentals", "get_industry",
     "get_security_info", "get_extras", "get_valuation", "get_current_data",
     "get_last_price", "query",
     "get_industries", "get_concepts", "get_industry_stocks",

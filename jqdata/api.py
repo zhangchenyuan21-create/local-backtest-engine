@@ -41,6 +41,11 @@ import pandas as pd
 
 from . import DATA_ROOT, CONTEXT, normalize_code, guard_date, store
 
+try:
+    from .fastcore import config as _fc_config
+except Exception:  # pragma: no cover
+    _fc_config = None
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 估值/财务表定义（供 query 对象使用）
 # ═══════════════════════════════════════════════════════════════════════════
@@ -597,6 +602,22 @@ def get_price(security, start_date=None, end_date=None, frequency="daily",
     end = _as_str(end_date) or _ctx_date() or "2100-01-01"
     guard_date(end, "get_price")
 
+    # Fast path: cross-section NumPy arrays instead of per-stock pandas slices.
+    if (_fc_config is not None and _fc_config.fast_enabled()
+            and count and not start_date
+            and len(codes) >= _fc_config.panel_min_codes()):
+        try:
+            from .fastcore import panel as _fc_panel
+            if panel:
+                fast = _fc_panel.price_wide(codes, end, int(count), fields[0])
+            else:
+                fast = _fc_panel.price_window(codes, end, int(count), fields)
+            if fast is not None:
+                return fast
+        except Exception:
+            if _fc_config.strict_fast():
+                raise
+
     frames = []
     for c in codes:
         if count:
@@ -770,6 +791,19 @@ def get_money_flow(security, start_date=None, end_date=None, fields=None,
     fields = list(fields or ["date", "sec_code", "net_amount_main", "change_pct"])
     end = _as_str(end_date) or _ctx_date() or "2100-01-01"
     guard_date(end, "get_money_flow")
+
+    # Fast path: build the (date x code) flow matrix once and emit the long
+    # table with NumPy repeat/tile/ravel instead of per-row dicts.
+    if (_fc_config is not None and _fc_config.fast_enabled()
+            and count and len(codes) >= _fc_config.panel_min_codes()):
+        try:
+            from .fastcore import panel as _fc_panel
+            fast = _fc_panel.flow_window(codes, end, int(count), fields)
+            if fast is not None:
+                return fast
+        except Exception:
+            if _fc_config.strict_fast():
+                raise
     want_net = "net_amount_main" in fields
     want_pct = "change_pct" in fields
 
@@ -815,6 +849,37 @@ def get_money_flow(security, start_date=None, end_date=None, fields=None,
         if f not in out.columns:
             out[f] = float("nan")
     return out[fields]
+
+
+def get_money_flow_summary(security, end_date=None, count=5, **kw):
+    """Aggregate money flow by date, without materialising per-stock rows.
+
+    Returns ``DataFrame[date, net_amount_main]`` in the same unit as
+    ``get_money_flow``'s ``net_amount_main`` (i.e. the sum of the raw values
+    divided by 1e4).  Returns ``None`` when the fast path is disabled or the
+    batch is small, so callers can fall back to the original API.
+
+    This is intentionally an *aggregate* API: the existing strategy helper
+    only ever does ``groupby('date').sum()`` on the batch result.
+    """
+    if _fc_config is None or not _fc_config.fast_enabled() or not count:
+        return None
+    codes = ([normalize_code(security)] if isinstance(security, str)
+             else [normalize_code(s) for s in security])
+    if len(codes) < _fc_config.flow_summary_min_codes():
+        return None
+    end = _as_str(end_date) or _ctx_date() or "2100-01-01"
+    guard_date(end, "get_money_flow_summary")
+    try:
+        from .fastcore import flow_agg
+        df = flow_agg.summary_frame(codes, end, int(count))
+        if df is None or df.empty:
+            return df
+        return df[["date", "net_amount_main"]]
+    except Exception:
+        if _fc_config.strict_fast():
+            raise
+        return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
